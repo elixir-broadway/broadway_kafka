@@ -253,6 +253,21 @@ defmodule BroadwayKafka.Producer do
   end
 
   @impl GenStage
+  def handle_info(:poll, %{fenced?: true} = state) do
+    {:noreply, [], state}
+  end
+
+  def handle_info(:poll, state) do
+    # Separate timers can arrive out of order if the process moves between
+    # schedulers. Send from this process so the marker follows every poll.
+    for key <- Acknowledger.keys(state.acks) do
+      send(self(), {:poll, key})
+    end
+
+    send(self(), :maybe_schedule_poll)
+    {:noreply, [], state}
+  end
+
   def handle_info({:poll, _key}, %{fenced?: true} = state) do
     {:noreply, [], state}
   end
@@ -568,7 +583,7 @@ defmodule BroadwayKafka.Producer do
         {:noreply, events, %{state | demand: 0, buffer: buffer, acks: acks}}
 
       {acks, demand, events, buffer} ->
-        receive_timer = receive_timer || schedule_poll(state, interval)
+        receive_timer = receive_timer || Process.send_after(self(), :poll, interval)
 
         state = %{
           state
@@ -580,14 +595,6 @@ defmodule BroadwayKafka.Producer do
 
         {:noreply, events, state}
     end
-  end
-
-  defp schedule_poll(state, interval) do
-    for key <- Acknowledger.keys(state.acks) do
-      Process.send_after(self(), {:poll, key}, interval)
-    end
-
-    Process.send_after(self(), :maybe_schedule_poll, interval)
   end
 
   defp fetch_messages_from_kafka(state, key, offset) do
