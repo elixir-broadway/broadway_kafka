@@ -75,6 +75,66 @@ defmodule BroadwayKafka.AcknowledgerTest do
     assert {true, 19, _} = Ack.update_current_offset(ack, @foo, [17])
   end
 
+  test "duplicate acknowledgements after draining do not block later offsets" do
+    ack = Ack.update_last_offset(@ack, @foo, 11, [10])
+    assert {true, 10, ack} = Ack.update_current_offset(ack, @foo, [10])
+    assert {true, nil, ack} = Ack.update_current_offset(ack, @foo, [10, 10])
+    assert ack[@foo] == {[], 11, []}
+
+    ack = Ack.update_last_offset(ack, @foo, 14, [11, 12, 13])
+    assert {false, nil, ack} = Ack.update_current_offset(ack, @foo, [12])
+    assert {true, 13, ack} = Ack.update_current_offset(ack, @foo, [11, 13])
+    assert Ack.all_drained?(ack)
+  end
+
+  test "duplicate offsets in one acknowledgement do not block out-of-order acknowledgements" do
+    ack = Ack.update_last_offset(@ack, @foo, 15, [10, 11, 12, 13, 14])
+    assert {false, nil, ack} = Ack.update_current_offset(ack, @foo, [11, 11, 12, 12, 13])
+    assert ack[@foo] == {[10, 11, 12, 13, 14], 15, [11, 12, 13]}
+
+    assert {false, 13, ack} = Ack.update_current_offset(ack, @foo, [10])
+    assert ack[@foo] == {[14], 15, []}
+    assert {true, 14, ack} = Ack.update_current_offset(ack, @foo, [14, 14])
+    assert Ack.all_drained?(ack)
+  end
+
+  test "an acknowledgement can repeat an offset already in seen" do
+    ack = Ack.update_last_offset(@ack, @foo, 14, [10, 11, 12, 13])
+    assert {false, nil, ack} = Ack.update_current_offset(ack, @foo, [11, 12])
+    assert {false, 12, ack} = Ack.update_current_offset(ack, @foo, [10, 11])
+    assert ack[@foo] == {[13], 14, []}
+    assert {true, 13, ack} = Ack.update_current_offset(ack, @foo, [13])
+    assert Ack.all_drained?(ack)
+  end
+
+  test "stale and duplicate seen offsets do not block pending acknowledgements" do
+    # Match the commit freeze: 803 is stale, and 804 appears twice in seen.
+    pending = Enum.to_list(804..903)
+    seen = [803, 804, 804] ++ Enum.to_list(805..899)
+    ack = %{@ack | @foo => {pending, 904, seen}}
+
+    assert {false, 900, ack} = Ack.update_current_offset(ack, @foo, [900])
+    assert ack[@foo] == {[901, 902, 903], 904, []}
+    assert {false, nil, ack} = Ack.update_current_offset(ack, @foo, [903])
+    assert {true, 903, ack} = Ack.update_current_offset(ack, @foo, [901, 902])
+    assert Ack.all_drained?(ack)
+  end
+
+  test "stale seen offsets in gaps do not block later acknowledgements" do
+    ack = Ack.update_last_offset(@ack, @foo, 20, [10, 13, 19])
+    assert {false, nil, ack} = Ack.update_current_offset(ack, @foo, [11, 13, 13, 19])
+    assert {true, 19, ack} = Ack.update_current_offset(ack, @foo, [10])
+    assert Ack.all_drained?(ack)
+  end
+
+  test "acknowledgements without pending messages do not acknowledge future messages" do
+    assert {true, nil, ack} = Ack.update_current_offset(@ack, @foo, [9, 10, 11])
+    ack = Ack.update_last_offset(ack, @foo, 12, [10, 11])
+    assert {false, 10, ack} = Ack.update_current_offset(ack, @foo, [10])
+    assert ack[@foo] == {[11], 12, []}
+    assert {true, 11, _ack} = Ack.update_current_offset(ack, @foo, [11])
+  end
+
   test "all_drained?" do
     ack = @ack
     assert Ack.all_drained?(ack)
@@ -91,6 +151,35 @@ defmodule BroadwayKafka.AcknowledgerTest do
 
   # Some poor man's property based testing.
   describe "property based testing" do
+    test "duplicate acknowledgements never commit past an unacknowledged offset" do
+      offsets = Enum.take_every(10..99, 3)
+      last = List.last(offsets) + 1
+
+      for n_parts <- 1..9 do
+        ack = Ack.update_last_offset(@ack, @foo, last, offsets)
+        groups = Enum.group_by(offsets ++ offsets ++ offsets, fn _ -> :rand.uniform(n_parts) end)
+
+        {ack, _, _} =
+          Enum.reduce(Map.values(groups), {ack, MapSet.new(), hd(offsets)}, fn group,
+                                                                               {ack, acked, next} ->
+            acked = MapSet.union(acked, MapSet.new(group))
+            pending = Enum.drop_while(offsets, &MapSet.member?(acked, &1))
+            new_next = List.first(pending) || last
+            expected_commit = if new_next > next, do: new_next - 1, else: nil
+
+            {drained?, commit, ack} = Ack.update_current_offset(ack, @foo, Enum.sort(group))
+
+            assert commit == expected_commit
+            assert drained? == (pending == [])
+            assert ack[@foo] == {pending, last, Enum.filter(pending, &MapSet.member?(acked, &1))}
+
+            {ack, acked, new_next}
+          end)
+
+        assert Ack.all_drained?(ack)
+      end
+    end
+
     # We generate a list from 10..99 and we break it into 1..9 random parts.
     test "drained?" do
       ack = Ack.update_last_offset(@ack, @foo, 100, Enum.to_list(10..99))

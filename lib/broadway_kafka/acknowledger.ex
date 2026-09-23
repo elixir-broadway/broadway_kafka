@@ -63,7 +63,7 @@ defmodule BroadwayKafka.Acknowledger do
   end
 
   @doc """
-  Receives a list of offsets update the current key.
+  Receives a sorted list of offsets to update the current key.
   Returns `{drained?, new_offset, t}`. The `drained?`
   value should be used a quick check during draining
   before checking if all partitions are drained.
@@ -93,6 +93,16 @@ defmodule BroadwayKafka.Acknowledger do
     {drained?(value), update, %{acknowledgers | key => value}}
   end
 
+  # Messages enter pending before dispatch, so no acknowledgements remain valid
+  # once pending is empty. Keeping them could acknowledge a later delivery.
+  defp update_offsets(_offsets, [], _seen), do: {[], []}
+
+  # An offset can occur in both the current acknowledgement and seen.
+  # Discard it from seen after pending has advanced past it.
+  defp update_offsets(offsets, [current | _] = pending, [offset | seen])
+       when offset < current,
+       do: update_offsets(offsets, pending, seen)
+
   # Discard older offsets
   defp update_offsets([offset | offsets], [current | _] = pending, seen)
        when offset < current,
@@ -106,9 +116,14 @@ defmodule BroadwayKafka.Acknowledger do
   defp update_offsets(offsets, [current | pending], [current | seen]),
     do: update_offsets(offsets, pending, seen)
 
-  # Merge any left over
+  # Merge any left over; we need to :ordsets.from_list/1 on the offsets
+  # in case there are duplicates in there, as:
+  #
+  #   :ordsets.union([1, 1], [2]) #=> [1, 1, 2]
+  #
+  # The seen list doesn't contain duplicates by construction.
   defp update_offsets(offsets, pending, seen),
-    do: {pending, :ordsets.union(offsets, seen)}
+    do: {pending, :ordsets.union(:ordsets.from_list(offsets), seen)}
 
   @doc """
   Returns if all keys drained.
