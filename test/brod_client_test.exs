@@ -228,6 +228,26 @@ defmodule BroadwayKafka.BrodClientTest do
       assert group_config[:offset_commit_interval_seconds] == 3
     end
 
+    test ":max_rejoin_attempts is an optional non-negative integer with default value 5" do
+      assert {:ok, [], %{group_config: group_config}} = BrodClient.init(@opts)
+      assert group_config[:max_rejoin_attempts] == 5
+
+      for value <- [0, 1, 10] do
+        opts = put_in(@opts, [:group_config, :max_rejoin_attempts], value)
+        assert {:ok, [], %{group_config: group_config}} = BrodClient.init(opts)
+        assert group_config[:max_rejoin_attempts] == value
+      end
+
+      for value <- [-1, 1.5, "5", :infinity] do
+        opts = put_in(@opts, [:group_config, :max_rejoin_attempts], value)
+
+        assert_opt_error(
+          opts,
+          "expected :max_rejoin_attempts to be a non negative integer, got: #{inspect(value)}"
+        )
+      end
+    end
+
     test ":rejoin_delay_seconds is an optional non-negative integer" do
       opts = put_in(@opts, [:group_config, :rejoin_delay_seconds], :an_atom)
 

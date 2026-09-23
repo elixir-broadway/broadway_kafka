@@ -20,6 +20,14 @@ defmodule BroadwayKafka.ProducerOptions do
       The time *in seconds* between two `OffsetCommitRequest` messages.
       """
     ],
+    max_rejoin_attempts: [
+      type: :non_neg_integer,
+      default: 5,
+      doc: """
+      The maximum number of attempts to rejoin the group before `:brod`'s group coordinator
+      stops. The count resets after a successful join. *Available since 0.6.2*.
+      """
+    ],
     rejoin_delay_seconds: [
       type: :non_neg_integer,
       default: 1,
