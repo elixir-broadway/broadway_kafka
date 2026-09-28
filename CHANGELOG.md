@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.6.2 (2026-09-28)
+
+  * Accept `:max_rejoin_attempts` option in `:group_config` in `BroadwayKafka.Producer`.
+  * Fix offset-commit but that would get partitions stuck, especially when using static memberhsip.
+
 ## v0.6.1 (2026-08-31)
 
   * Require `:brod` 4.6.3.
