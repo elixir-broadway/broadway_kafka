@@ -665,11 +665,10 @@ defmodule BroadwayKafka.ProducerTest do
 
     assert_receive {:messages_fetched, 0}
 
-    :sys.suspend(producer)
+    Broadway.Topology.ProducerStage.drain(producer)
+    # Wait for the drain casts before discarding earlier fetch notifications.
+    assert GenStage.demand(producer) == :accumulate
     flush_messages_received()
-    task = Task.async(fn -> Broadway.Topology.ProducerStage.drain(producer) end)
-    :sys.resume(producer)
-    Task.await(task)
 
     refute_receive {:messages_fetched, 0}, 10
 
