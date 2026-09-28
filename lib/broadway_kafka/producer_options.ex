@@ -6,11 +6,20 @@ defmodule BroadwayKafka.ProducerOptions do
       type: {:custom, __MODULE__, :validate_nonempty_string, [:group_instance_id]},
       doc: """
       A unique, non-empty string that identifies this consumer group member across restarts.
+      Each producer is one consumer-group member, and Kafka assigns partitions across members.
+
       This enables [static group membership](https://kafka.apache.org/39/design/design/#static-membership)
       and requires `:brod` 4.6.3 or later. When Kafka fences a static member, BroadwayKafka
       stops that member instead of trying to take the ID back. Retrying can make old and new
       instances fence each other during a rolling deploy and cause repeated group rebalances.
       *Available since v0.6.0*.
+
+      BroadwayKafka adds `"-<index>"` to this ID, using the zero-based producer index.
+      For example, `"vm-a"` with concurrency `3` gives `"vm-a-0"`, `"vm-a-1"`, and
+      `"vm-a-2"`, and `"vm-a"` with concurrency `1` gives `"vm-a-0"`. Each running
+      instance of the pipeline must still use a distinct base ID. This suffixing behavior
+      is present since v0.7.0: the first deploy of v0.7.0 or later changes the ID of each
+      static member, which causes a consumer group rebalance.
       """
     ],
     offset_commit_interval_seconds: [

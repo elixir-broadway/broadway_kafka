@@ -47,6 +47,29 @@ defmodule BroadwayKafka.Producer do
   to do it), you should increase the concurrency up front to make sure you have enough
   processors to handle the extra messages received from new partitions assigned.
 
+  Each Broadway producer is one consumer-group member. Kafka assigns partitions across
+  these members. Set the producer's `:concurrency` option to start more than one member
+  in a pipeline. This can be useful when the number of BEAM instances you're running
+  is lower than the number of topic partitions.
+
+  With static membership (`:group_instance_id`), each producer adds `"-<index>"` to the
+  configured ID. The index starts at zero: for example, `"vm-a"` with concurrency `3`
+  gives `"vm-a-0"`, `"vm-a-1"`, and `"vm-a-2"`, and `"vm-a"` with concurrency `1` gives
+  `"vm-a-0"`. Each running instance of the pipeline must still use a distinct base ID.
+  This behavior is present since v0.7.0 of this library.
+
+  If you decrease the producer concurrency, Kafka keeps each member that no longer exists
+  until its session timeout expires, and does not reassign the partitions of that member
+  during that time.
+
+  > #### Upgrading to v0.7.0 with static membership {: .warning}
+  >
+  > Before v0.7.0, the member ID was the configured `:group_instance_id` without the
+  > index. The first deploy of v0.7.0 or later changes the ID of each static member, which
+  > causes a consumer group rebalance. Kafka also keeps each old member until its session
+  > timeout expires (see `:session_timeout_seconds`), and does not reassign the partitions
+  > of that member during that time.
+
   > **Note**: Even if you don't plan to add more partitions to a Kafka topic, your pipeline can still
   receive more assignments than planned. For instance, if another consumer crashes, the server
   will reassign all its topic/partition to other available consumers, including any Broadway
@@ -153,6 +176,14 @@ defmodule BroadwayKafka.Producer do
     Process.flag(:trap_exit, true)
 
     config = opts[:initialized_client_config]
+
+    config =
+      if group_instance_id = get_in(config, [:group_config, :group_instance_id]) do
+        index = opts[:broadway][:index]
+        put_in(config, [:group_config, :group_instance_id], "#{group_instance_id}-#{index}")
+      else
+        config
+      end
 
     draining_after_revoke_flag =
       self()

@@ -113,7 +113,7 @@ defmodule BroadwayKafka.FencingIntegrationTest do
                     %{
                       producer: ^first_producer,
                       group_id: ^group_id,
-                      group_instance_id: ^group_instance_id
+                      group_instance_id: "member-1-0"
                     }},
                    10_000
 
