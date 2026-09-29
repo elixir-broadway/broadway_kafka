@@ -52,7 +52,7 @@ defmodule BroadwayKafka.ProducerTest do
     def init(opts), do: {:ok, opts[:child_specs], Map.new(opts)}
 
     @impl true
-    def setup(_stage_pid, client_id, _callback_module, config) do
+    def setup(stage_pid, client_id, _callback_module, config) do
       if !Process.whereis(client_id) do
         {:ok, _pid} = Agent.start(fn -> Map.put(config, :connected, true) end, name: client_id)
         Process.monitor(client_id)
@@ -60,6 +60,7 @@ defmodule BroadwayKafka.ProducerTest do
 
       send(config[:test_pid], {:setup, client_id})
       {pid, ref} = spawn_monitor(fn -> Process.sleep(:infinity) end)
+      send(config[:test_pid], {:setup_config, stage_pid, config, pid})
 
       if config[:expose_group_coordinator] do
         send(config[:test_pid], {:group_coordinator, pid})
@@ -675,6 +676,82 @@ defmodule BroadwayKafka.ProducerTest do
     stop_broadway(pid)
   end
 
+  test "adds the producer index to static member IDs with concurrency three" do
+    {:ok, message_server} = MessageServer.start_link()
+
+    {:ok, pid} =
+      start_broadway(message_server, producers_concurrency: 3, group_instance_id: "g")
+
+    for index <- 0..2 do
+      producer = pid |> get_producer(index) |> Process.whereis()
+      assert_receive {:setup_config, ^producer, config, _coordinator}
+      assert config.group_config[:group_instance_id] == "g-#{index}"
+    end
+
+    stop_broadway(pid)
+  end
+
+  test "adds the producer index to the static member ID with concurrency one" do
+    {:ok, message_server} = MessageServer.start_link()
+    {:ok, pid} = start_broadway(message_server, group_instance_id: "g")
+
+    assert_receive {:setup_config, _producer, config, _coordinator}
+    assert config.group_config[:group_instance_id] == "g-0"
+
+    stop_broadway(pid)
+  end
+
+  test "does not add a static member ID when none is configured" do
+    {:ok, message_server} = MessageServer.start_link()
+    {:ok, pid} = start_broadway(message_server, producers_concurrency: 3)
+
+    for index <- 0..2 do
+      producer = pid |> get_producer(index) |> Process.whereis()
+      assert_receive {:setup_config, ^producer, config, _coordinator}
+      refute Keyword.has_key?(config.group_config, :group_instance_id)
+    end
+
+    stop_broadway(pid)
+  end
+
+  test "reconnect and fencing telemetry keep the effective static member ID" do
+    handler_id = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:broadway_kafka, :fenced_instance_id],
+        &__MODULE__.handle_telemetry/4,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    {:ok, message_server} = MessageServer.start_link()
+
+    {:ok, pid} =
+      start_broadway(message_server, producers_concurrency: 3, group_instance_id: "g")
+
+    producer = pid |> get_producer(1) |> Process.whereis()
+    assert_receive {:setup_config, ^producer, config, coordinator}
+    assert config.group_config[:group_instance_id] == "g-1"
+
+    Process.exit(coordinator, :shutdown)
+
+    assert_receive {:setup_config, ^producer, reconnected_config, new_coordinator}
+    assert reconnected_config == config
+    assert new_coordinator != coordinator
+
+    capture_log(fn ->
+      Process.exit(new_coordinator, :fenced_instance_id)
+
+      assert_receive {:telemetry, [:broadway_kafka, :fenced_instance_id], _,
+                      %{producer: ^producer, group_instance_id: "g-1"}}
+    end)
+
+    stop_broadway(pid)
+  end
+
   test "if connection is lost, reconnect when :brod client is ready again" do
     {:ok, message_server} = MessageServer.start_link()
     {:ok, pid} = start_broadway(message_server)
@@ -736,7 +813,7 @@ defmodule BroadwayKafka.ProducerTest do
                           producer: ^producer,
                           client_id: ^client_id,
                           group_id: "group",
-                          group_instance_id: "consumer-1"
+                          group_instance_id: "consumer-1-0"
                         }}
 
         assert is_integer(system_time)
