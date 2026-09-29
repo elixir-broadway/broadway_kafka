@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.7.0 (2026-09-29)
+
+  * Support producer concurrency `> 1` when using **static membership**. Before v0.7.0, the member ID was the configured `:group_instance_id`. The first deploy of v0.7.0 or later changes the ID of each static member (by adding an index, which is what supports greater-than-one producer concurrency); this causes a consumer group rebalance. Kafka also keeps each old member until its session timeout expires (see `:session_timeout_seconds`), and does not reassign the partitions of that member during that time.
+
 ## v0.6.2 (2026-09-28)
 
   * Accept `:max_rejoin_attempts` option in `:group_config` in `BroadwayKafka.Producer`.
