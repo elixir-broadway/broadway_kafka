@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+  * Stop a non-shared `:brod` client that went down when the producer terminates. Before, the client stayed registered in `:brod`, and restarting the producer failed with `{:error, :already_present}`.
+
 ## v0.7.0 (2026-09-29)
 
   * Support producer concurrency `> 1` when using **static membership**. Before v0.7.0, the member ID was the configured `:group_instance_id`. The first deploy of v0.7.0 or later changes the ID of each static member (by adding an index, which is what supports greater-than-one producer concurrency); this causes a consumer group rebalance. Kafka also keeps each old member until its session timeout expires (see `:session_timeout_seconds`), and does not reassign the partitions of that member during that time.
