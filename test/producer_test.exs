@@ -770,6 +770,28 @@ defmodule BroadwayKafka.ProducerTest do
     stop_broadway(pid)
   end
 
+  test "disconnect a non-shared client that went down when stopping" do
+    {:ok, message_server} = MessageServer.start_link()
+    {:ok, pid} = start_broadway(message_server)
+
+    assert_receive {:setup, client_id}
+
+    # :brod keeps a client that went down registered until it restarts it
+    ref = client_id |> Process.whereis() |> Process.monitor()
+    Process.exit(Process.whereis(client_id), :kill)
+    assert_receive {:DOWN, ^ref, _, _, _}
+    test_pid = self()
+
+    {:ok, _} =
+      Agent.start_link(fn -> %{test_pid: test_pid, connected: false} end, name: client_id)
+
+    refute_receive {:setup, _}
+
+    stop_broadway(pid)
+
+    assert_receive :disconnected
+  end
+
   test "fully pauses a fenced static group member and emits telemetry" do
     handler_id = {__MODULE__, make_ref()}
 

@@ -441,7 +441,9 @@ defmodule BroadwayKafka.Producer do
     state = reset_buffer(state)
     schedule_reconnect(state.reconnect_timeout)
 
-    {:noreply, [], %{state | group_coordinator: nil, client_connected?: false}}
+    # :brod keeps a client that went down registered, to restart it later,
+    # so it still has to be stopped on terminate/2.
+    {:noreply, [], %{state | group_coordinator: nil}}
   end
 
   def handle_info(
