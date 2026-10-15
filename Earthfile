@@ -3,7 +3,7 @@ VERSION  0.7
 all:
     BUILD \
         --build-arg ELIXIR_BASE=1.16.3-erlang-24.3.4.2-alpine-3.20.8 \
-        --build-arg ELIXIR_BASE=1.16.3-erlang-26.2.5.11-alpine-3.23.3 \
+        --build-arg ELIXIR_BASE=1.20.4-erlang-29.1.2-alpine-3.23.6 \
         +integration-test
 
 
