@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.7.1 (2026-10-15)
 
-  * Stop a non-shared `:brod` client that went down when the producer terminates. Before, the client stayed registered in `:brod`, and restarting the producer failed with `{:error, :already_present}`.
+  * Stop a non-shared `:brod` client that went down when the producer terminates. Before, the client stayed registered in `:brod`, and restarting the producer failed with `{:error, :already_present}`. This helps a lot in tests, especially.
 
 ## v0.7.0 (2026-09-29)
 
