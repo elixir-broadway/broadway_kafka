@@ -17,12 +17,12 @@ jobs:
       matrix:
         elixirbase:
           - "1.16.3-erlang-24.3.4.2-alpine-3.20.8"
-          - "1.16.3-erlang-26.2.5.11-alpine-3.23.3"
+          - "1.20.4-erlang-29.1.2-alpine-3.23.6"
     steps:
       - uses: actions/checkout@v4
       - name: Download released earthly
         run: "sudo /bin/sh -c 'wget https://github.com/earthly/earthly/releases/download/v0.7.2/earthly-linux-amd64 -O /usr/local/bin/earthly && chmod +x /usr/local/bin/earthly'"
-      - name: Kafka Brodway integration-test under ${{matrix.elixirbase}}
+      - name: Kafka Broadway integration-test under ${{matrix.elixirbase}}
         run: earthly -P --ci --build-arg ELIXIR_BASE=${{matrix.elixirbase}} +integration-test
   test:
     runs-on: ubuntu-latest
@@ -33,11 +33,11 @@ jobs:
       matrix:
         include:
           - pair:
-              elixir: 1.16
-              otp: 24
+              elixir: "1.16"
+              otp: "24"
           - pair:
-              elixir: 1.16
-              otp: 26
+              elixir: "1.20"
+              otp: "29"
             lint: lint
     steps:
       - uses: actions/checkout@v4
