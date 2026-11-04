@@ -262,7 +262,7 @@ defmodule BroadwayKafka.ProducerOptions do
       Retry waits and request times add up across partitions that recover. The producer
       raises on the first error that uses all retries, without trying the remaining partitions.
       Size this option and `:offset_resolution_retry_backoff_ms` to keep the total assignment
-      time within `:rebalance_timeout_seconds` in `:group_config`.
+      time within `:rebalance_timeout_seconds` in `:group_config`. *Available since v0.7.2*.
       """
     ],
     offset_resolution_retry_backoff_ms: [
@@ -273,7 +273,7 @@ defmodule BroadwayKafka.ProducerOptions do
       (see `:max_offset_resolution_retries`). The wait stays fixed for all retries.
       Each check or lookup has its own retry count. Its total retry wait is at most
       `:max_offset_resolution_retries` times this value. Request times add to this delay.
-      BroadwayKafka uses this option itself and does not pass it to `:brod`.
+      BroadwayKafka uses this option itself and does not pass it to `:brod`. *Available since v0.7.2*.
       """
     ],
     begin_offset: [
