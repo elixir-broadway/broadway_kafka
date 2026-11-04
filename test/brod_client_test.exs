@@ -187,6 +187,26 @@ defmodule BroadwayKafka.BrodClientTest do
       assert {:ok, [], %{begin_offset: :reset}} = BrodClient.init(opts)
     end
 
+    test "offset resolution retry options are non-negative integers" do
+      assert {:ok, [], config} = BrodClient.init(@opts)
+      assert config.max_offset_resolution_retries == 2
+      assert config.offset_resolution_retry_backoff_ms == 100
+
+      for option <- [:max_offset_resolution_retries, :offset_resolution_retry_backoff_ms] do
+        for value <- [0, 1, 10] do
+          assert {:ok, [], config} = BrodClient.init(Keyword.put(@opts, option, value))
+          assert config[option] == value
+        end
+
+        for value <- [-1, 1.5, "5", :infinity] do
+          assert_opt_error(
+            Keyword.put(@opts, option, value),
+            "expected #{inspect(option)} to be a non negative integer, got: #{inspect(value)}"
+          )
+        end
+      end
+    end
+
     test ":group_instance_id is an optional non-empty string" do
       opts = put_in(@opts, [:group_config, :group_instance_id], :an_atom)
 
@@ -558,6 +578,104 @@ defmodule BroadwayKafka.BrodClientTest do
   end
 
   describe "resolve_offset/5" do
+    test "uses the custom retry count for both offset checks and lookups" do
+      config = brod_config(max_offset_resolution_retries: 4)
+
+      for offset <- [10, :undefined] do
+        results = List.duplicate({:error, :nxdomain}, 4) ++ [{:ok, 10}]
+
+        with_brod_results(results, fn ->
+          assert BrodClient.resolve_offset("topic", 2, offset, :latest, config) == 10
+          assert Process.get({FakeBrod, :results}) == []
+        end)
+      end
+    end
+
+    test "raises with the last error after the custom retry count" do
+      config = brod_config(max_offset_resolution_retries: 1)
+
+      for offset <- [10, :undefined] do
+        with_brod_results([{:error, :nxdomain}, {:error, :timeout}, {:ok, 10}], fn ->
+          assert_raise RuntimeError, ~r/Reason: :timeout$/, fn ->
+            BrodClient.resolve_offset("topic", 2, offset, :latest, config)
+          end
+
+          assert Process.get({FakeBrod, :results}) == [{:ok, 10}]
+        end)
+      end
+    end
+
+    test "zero retries raises on the first failed offset check or lookup" do
+      config = brod_config(max_offset_resolution_retries: 0)
+
+      for offset <- [10, :undefined] do
+        with_brod_results([{:error, :nxdomain}, {:ok, 10}], fn ->
+          assert_raise RuntimeError, ~r/Reason: :nxdomain$/, fn ->
+            BrodClient.resolve_offset("topic", 2, offset, :latest, config)
+          end
+
+          assert Process.get({FakeBrod, :results}) == [{:ok, 10}]
+        end)
+      end
+    end
+
+    test "waits the configured backoff before each retry" do
+      config = brod_config(offset_resolution_retry_backoff_ms: 1)
+      test_pid = self()
+
+      tracer =
+        spawn(fn ->
+          for _ <- 1..4 do
+            receive do
+              {:trace, ^test_pid, :call, {Process, :sleep, [backoff]}} ->
+                send(test_pid, {:backoff, backoff})
+            end
+          end
+        end)
+
+      :erlang.trace_pattern({Process, :sleep, 1}, true, [:local])
+      :erlang.trace(self(), true, [:call, {:tracer, tracer}])
+
+      try do
+        for offset <- [10, :undefined] do
+          with_brod_results([{:error, :nxdomain}, {:error, :timeout}, {:ok, 10}], fn ->
+            assert BrodClient.resolve_offset("topic", 2, offset, :latest, config) == 10
+          end)
+
+          assert_receive {:backoff, 1}
+          assert_receive {:backoff, 1}
+        end
+      after
+        :erlang.trace(self(), false, [:call])
+        :erlang.trace_pattern({Process, :sleep, 1}, false, [:local])
+        Process.exit(tracer, :kill)
+      end
+    end
+
+    test "does not retry an out-of-range lookup" do
+      with_brod_results([{:error, :offset_out_of_range}, {:ok, 4}], fn ->
+        assert_raise RuntimeError, ~r/Reason: :offset_out_of_range$/, fn ->
+          BrodClient.resolve_offset("topic", 2, :undefined, :earliest, brod_config())
+        end
+
+        assert Process.get({FakeBrod, :results}) == [{:ok, 4}]
+      end)
+    end
+
+    test "uses the retry options when a timestamp lookup falls back to latest" do
+      config = brod_config(max_offset_resolution_retries: 1)
+
+      with_brod_results([{:error, :timeout}, {:ok, -1}, {:error, :nxdomain}, {:ok, 4}], fn ->
+        assert BrodClient.resolve_offset("topic", 2, :undefined, {:timestamp, 123}, config) == 4
+
+        assert_receive {:resolve_offset, _, "topic", 2, 123, []}
+        assert_receive {:resolve_offset, _, "topic", 2, 123, []}
+        assert_receive {:resolve_offset, _, "topic", 2, :latest, []}
+        assert_receive {:resolve_offset, _, "topic", 2, :latest, []}
+        assert Process.get({FakeBrod, :results}) == []
+      end)
+    end
+
     test "retries transient fetch errors and returns the current offset after success" do
       with_brod_results(
         [{:error, :enotconn}, {:error, :timeout}, {:ok, {11, []}}],
@@ -636,12 +754,14 @@ defmodule BroadwayKafka.BrodClientTest do
     assert message =~ expected
   end
 
-  defp brod_config do
-    %{
-      hosts: [{"broker", 9092}],
-      client_config: [],
-      brod_module: FakeBrod
-    }
+  defp brod_config(opts \\ []) do
+    opts =
+      @opts
+      |> Keyword.merge(hosts: [{"broker", 9092}], offset_resolution_retry_backoff_ms: 0)
+      |> Keyword.merge(opts)
+
+    {:ok, [], config} = BrodClient.init(opts)
+    Map.put(config, :brod_module, FakeBrod)
   end
 
   defp with_brod_results(results, fun) do

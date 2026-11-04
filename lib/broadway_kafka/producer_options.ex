@@ -249,6 +249,33 @@ defmodule BroadwayKafka.ProducerOptions do
       time in milliseconds.
       """
     ],
+    max_offset_resolution_retries: [
+      type: :non_neg_integer,
+      default: 2,
+      doc: """
+      How many times the producer retries a failed offset check or lookup before it raises.
+      The count excludes the first attempt, so the default allows three attempts in total.
+      Set to `0` to disable retries. The producer does not retry `:offset_out_of_range` errors.
+      BroadwayKafka uses this option itself and does not pass it to `:brod`.
+
+      During partition assignment, the producer resolves offsets one partition at a time.
+      Retry waits and request times add up across partitions that recover. The producer
+      raises on the first error that uses all retries, without trying the remaining partitions.
+      Size this option and `:offset_resolution_retry_backoff_ms` to keep the total assignment
+      time within `:rebalance_timeout_seconds` in `:group_config`. *Available since v0.7.2*.
+      """
+    ],
+    offset_resolution_retry_backoff_ms: [
+      type: :non_neg_integer,
+      default: 100,
+      doc: """
+      The time, in milliseconds, to wait before each retry of a failed offset check or lookup
+      (see `:max_offset_resolution_retries`). The wait stays fixed for all retries.
+      Each check or lookup has its own retry count. Its total retry wait is at most
+      `:max_offset_resolution_retries` times this value. Request times add to this delay.
+      BroadwayKafka uses this option itself and does not pass it to `:brod`. *Available since v0.7.2*.
+      """
+    ],
     begin_offset: [
       type: {:in, [:assigned, :reset]},
       default: :assigned,
