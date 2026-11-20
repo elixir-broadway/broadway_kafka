@@ -11,8 +11,6 @@ defmodule BroadwayKafka.BrodClient do
   # Retrying after Kafka fences a static member can make old and new instances
   # fence each other during a rolling deploy and cause repeated group rebalances.
   @fenced_member_action :stop
-  @offset_resolution_attempts 3
-  @offset_resolution_backoff_ms 100
 
   @impl true
   def init(opts) do
@@ -30,6 +28,8 @@ defmodule BroadwayKafka.BrodClient do
         reconnect_timeout: opts[:reconnect_timeout],
         offset_commit_on_ack: opts[:offset_commit_on_ack],
         offset_reset_policy: opts[:offset_reset_policy],
+        max_offset_resolution_retries: opts[:max_offset_resolution_retries],
+        offset_resolution_retry_backoff_ms: opts[:offset_resolution_retry_backoff_ms],
         begin_offset: opts[:begin_offset],
         group_config: [
           {:offset_commit_policy, @offset_commit_policy},
@@ -104,19 +104,22 @@ defmodule BroadwayKafka.BrodClient do
     brod = Map.get(config, :brod_module, :brod)
 
     if current_offset == :undefined do
-      lookup_offset(config.hosts, topic, partition, policy, config.client_config, brod)
+      lookup_offset(topic, partition, policy, config, brod)
     else
       result =
-        retry_offset_resolution(fn ->
-          brod.fetch({config.hosts, config.client_config}, topic, partition, current_offset)
-        end)
+        retry_offset_resolution(
+          fn ->
+            brod.fetch({config.hosts, config.client_config}, topic, partition, current_offset)
+          end,
+          config
+        )
 
       case result do
         {:ok, _} ->
           current_offset
 
         {:error, :offset_out_of_range} ->
-          lookup_offset(config.hosts, topic, partition, policy, config.client_config, brod)
+          lookup_offset(topic, partition, policy, config, brod)
 
         {:error, reason} ->
           raise "cannot resolve offset (hosts=#{inspect(config.hosts)} topic=#{topic} " <>
@@ -138,11 +141,14 @@ defmodule BroadwayKafka.BrodClient do
     ]
   end
 
-  defp lookup_offset(hosts, topic, partition, policy, client_config, brod) do
+  defp lookup_offset(topic, partition, policy, config, brod) do
     result =
-      retry_offset_resolution(fn ->
-        brod.resolve_offset(hosts, topic, partition, policy, client_config)
-      end)
+      retry_offset_resolution(
+        fn ->
+          brod.resolve_offset(config.hosts, topic, partition, policy, config.client_config)
+        end,
+        config
+      )
 
     case result do
       {:ok, -1} ->
@@ -150,22 +156,30 @@ defmodule BroadwayKafka.BrodClient do
         # than all the messages in the partition.
         # -1 is not a valid offset you can use with `:brod.fetch` so we need to
         # resolve the latest offset instead
-        lookup_offset(hosts, topic, partition, :latest, client_config, brod)
+        lookup_offset(topic, partition, :latest, config, brod)
 
       {:ok, offset} ->
         offset
 
       {:error, reason} ->
-        raise "cannot resolve begin offset (hosts=#{inspect(hosts)} topic=#{topic} " <>
+        raise "cannot resolve begin offset (hosts=#{inspect(config.hosts)} topic=#{topic} " <>
                 "partition=#{partition}). Reason: #{inspect(reason)}"
     end
   end
 
-  defp retry_offset_resolution(fun, attempts_left \\ @offset_resolution_attempts) do
+  defp retry_offset_resolution(fun, config) do
+    retry_offset_resolution(
+      fun,
+      config.max_offset_resolution_retries,
+      config.offset_resolution_retry_backoff_ms
+    )
+  end
+
+  defp retry_offset_resolution(fun, retries_left, backoff_ms) do
     case fun.() do
-      {:error, reason} when reason != :offset_out_of_range and attempts_left > 1 ->
-        Process.sleep(@offset_resolution_backoff_ms)
-        retry_offset_resolution(fun, attempts_left - 1)
+      {:error, reason} when reason != :offset_out_of_range and retries_left > 0 ->
+        Process.sleep(backoff_ms)
+        retry_offset_resolution(fun, retries_left - 1, backoff_ms)
 
       result ->
         result
