@@ -25,7 +25,7 @@ jobs:
       - name: Kafka Broadway integration-test under ${{matrix.elixirbase}}
         run: earthly -P --ci --build-arg ELIXIR_BASE=${{matrix.elixirbase}} +integration-test
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     env:
       MIX_ENV: test
     strategy:
@@ -35,9 +35,11 @@ jobs:
           - pair:
               elixir: "1.16"
               otp: "24"
+            runner: ubuntu-24.04
           - pair:
               elixir: "1.20"
               otp: "29"
+            runner: ubuntu-latest
             lint: lint
     steps:
       - uses: actions/checkout@v4
